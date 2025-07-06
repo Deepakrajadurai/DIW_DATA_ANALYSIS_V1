@@ -1,25 +1,55 @@
+// DashboardApp: Main class for the economic insights dashboard
 class DashboardApp {
+    /**
+     * Constructor initializes app state, loads cached key actors, and starts the app.
+     */
     constructor() {
-        this.currentReportId = 'storyboard';
-        this.reports = [];
-        this.currentChat = null;
+        this.currentReportId = 'storyboard'; // Track which section is active
+        this.reports = []; // All loaded reports
+        this.currentChat = null; // Current chat state
+        this.cachedKeyActors = null; // Store latest AI-generated key actors
+        // Speech synthesis for read-aloud
+        this.speechSynthesis = window.speechSynthesis;
+        this.speechUtterance = null;
+        this.isSpeaking = false;
+        // Try to load cached key actors from localStorage
+        const storedActors = localStorage.getItem('cachedKeyActors');
+        if (storedActors) {
+            try {
+                this.cachedKeyActors = JSON.parse(storedActors);
+            } catch (e) {
+                this.cachedKeyActors = null;
+            }
+        }
         this.init();
     }
 
+    /**
+     * Initialize the dashboard: load reports, render sidebar, show storyboard, and setup drag-and-drop.
+     */
     async init() {
-        await this.loadReports();
-        this.renderSidebar();
-        this.showStoryboard();
-        this.setupDragAndDrop();
+        try {
+            await this.loadReports();
+            this.renderSidebar();
+            this.showStoryboard();
+            this.setupDragAndDrop();
+        } catch (error) {
+            console.error('Error initializing app:', error);
+            this.showNotification('Failed to initialize application', 'error');
+        }
     }
 
     async loadReports() {
         try {
             const response = await fetch('/api/reports');
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
             const data = await response.json();
-            this.reports = data.reports;
+            this.reports = data.reports || [];
         } catch (error) {
             console.error('Error loading reports:', error);
+            this.reports = []; // Set empty array as fallback
             this.showNotification('Failed to load reports', 'error');
         }
     }
@@ -52,78 +82,126 @@ class DashboardApp {
         this.currentReportId = 'storyboard';
         this.updateSidebarSelection('storyboard');
         
+        // Initial card UI for storyboard
         const content = `
-            <div class="bg-gray-800 p-6 rounded-lg shadow-xl border border-gray-700 max-w-7xl mx-auto">
+            <div class="bg-gray-800 p-6 rounded-lg shadow-xl border border-gray-700 max-w-5xl mx-auto">
                 <h2 class="text-3xl font-bold text-white mb-2">AI Macroeconomic Storyboard</h2>
-                <p class="text-gray-400 mb-6">Generate a high-level narrative with synthesized charts to see the bigger picture across all economic reports.</p>
-                
+                <p class="text-gray-400 mb-6">Generate a high-level narrative with synthesized charts and AI analysis to see the bigger picture across all economic reports.</p>
                 <div id="storyboard-content" class="text-center py-8">
                     <button onclick="app.generateStoryboard()" class="bg-green-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-700 transition-all duration-200 flex items-center justify-center mx-auto text-lg">
-                        <i class="fa-solid fa-wand-magic-sparkles mr-3"></i>Generate Storyboard
+                        <i class="fa-solid fa-wand-magic-sparkles mr-3"></i> Generate Storyboard
                     </button>
                 </div>
             </div>
         `;
-        
         document.getElementById('content-area').innerHTML = content;
     }
 
     async generateStoryboard() {
-        const button = document.querySelector('#storyboard-content button');
-        const originalHtml = button.innerHTML;
-        button.innerHTML = `${this.getSpinner()} Synthesizing reports and building visualizations...`;
-        button.disabled = true;
-
+        const contentDiv = document.getElementById('storyboard-content');
+        contentDiv.innerHTML = `${this.getSpinner()} Generating AI Storyboard...`;
         try {
             const response = await fetch('/api/generate-storyboard', { method: 'POST' });
-            
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
-            
-            const storyboard = await response.json();
-            
-            const storyboardHtml = `
-                <div class="mt-4 grid grid-cols-1 lg:grid-cols-5 gap-8">
-                    <div class="lg:col-span-3">
-                        <h3 class="text-2xl font-bold text-white mb-4 border-b border-gray-600 pb-2">Synthesized Narrative</h3>
-                        <div class="prose-custom max-w-none text-gray-300">
-                            ${marked.parse(storyboard.narrative)}
-                        </div>
-                    </div>
-                    <div class="lg:col-span-2 flex flex-col gap-8">
-                        <h3 class="text-2xl font-bold text-white mb-0 border-b border-gray-600 pb-2">Synthesized Visualizations</h3>
-                        <div id="storyboard-charts">
-                            ${storyboard.charts.length > 0 ? '' : '<div class="bg-gray-700/50 p-4 rounded-lg text-center text-gray-400"><p>The AI did not generate specific visualizations for this synthesis.</p></div>'}
-                        </div>
-                    </div>
-                </div>
-                <div class="text-center mt-12">
-                    <button onclick="app.generateStoryboard()" class="bg-gray-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-gray-500 transition-all duration-200 flex items-center justify-center mx-auto">
-                        <i class="fa-solid fa-arrows-rotate mr-2"></i>Regenerate Storyboard
-                    </button>
-                </div>
-            `;
-            
-            document.getElementById('storyboard-content').innerHTML = storyboardHtml;
-            
-            // Render charts
-            if (storyboard.charts.length > 0) {
-                this.renderCharts(storyboard.charts, 'storyboard-charts');
+            const data = await response.json();
+            // Cache key actors if present
+            if (data.keyActors && Array.isArray(data.keyActors) && data.keyActors.length > 0) {
+                this.cachedKeyActors = data.keyActors;
+                localStorage.setItem('cachedKeyActors', JSON.stringify(data.keyActors));
+                // If Key Actors tab is active, re-render it
+                if (this.currentReportId === 'key_actors') {
+                    this.showKeyActors();
+                }
             }
-            
-            this.showNotification('Storyboard generated successfully!', 'success');
-        } catch (error) {
-            console.error('Error generating storyboard:', error);
-            document.getElementById('storyboard-content').innerHTML = `
-                <p class="text-red-400 bg-red-900/50 p-3 rounded-md">An error occurred while generating the storyboard: ${error.message}</p>
-                <div class="text-center mt-4">
-                    <button onclick="app.generateStoryboard()" class="bg-green-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-700">
-                        <i class="fa-solid fa-wand-magic-sparkles mr-3"></i>Try Again
-                    </button>
+            // Build the storyboard sections
+            let html = '';
+            // 1. The Singularity Thesis
+            html += `
+                <div class="bg-gray-900/80 border border-gray-700 rounded-lg p-6 mb-8 shadow-lg">
+                    <h3 class="text-2xl font-bold text-green-400 mb-2">The Singularity Thesis</h3>
+                    <div class="text-xl text-white font-semibold mb-2">${data.title}</div>
+                    <div class="text-gray-300 text-lg">${marked.parse(data.narrative)}</div>
                 </div>
             `;
-            this.showNotification('Failed to generate storyboard', 'error');
+            // 2. Inter-Report Relationships
+            html += `
+                <div class="bg-gray-900/80 border border-gray-700 rounded-lg p-6 mb-8 shadow-lg">
+                    <h3 class="text-2xl font-bold text-blue-400 mb-4">Inter-Report Relationships</h3>
+                    <div id="relationship-graph" class="mb-2"></div>
+                    <div class="text-gray-300 text-sm">This graph shows the most critical connections between reports supporting the singularity thesis.</div>
+                </div>
+            `;
+            // 3. Synthesized Visualizations
+            if (data.charts && data.charts.length > 0) {
+                html += `
+                    <div class="bg-gray-900/80 border border-gray-700 rounded-lg p-6 mb-8 shadow-lg">
+                        <h3 class="text-2xl font-bold text-purple-400 mb-4">Synthesized Visualizations</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            ${data.charts.map((chart, i) => `
+                                <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+                                    <div class="font-bold text-white mb-2">${chart.title}</div>
+                                    <div class="text-gray-400 text-sm mb-2">${chart.description || ''}</div>
+                                    <div id="storyboard-chart-${i}" class="h-64"></div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            // 4. AI Introspection: The 'Why'
+            html += `
+                <div class="bg-gray-900/80 border border-gray-700 rounded-lg p-6 mb-8 shadow-lg">
+                    <h3 class="text-2xl font-bold text-yellow-400 mb-2">AI Introspection: The 'Why'</h3>
+                    <div class="prose prose-invert max-w-none text-gray-200">${data.introspection && data.introspection.trim() ? marked.parse(data.introspection) : '<span class="italic text-gray-400">No introspection provided by AI.</span>'}</div>
+                </div>
+            `;
+            // 5. AI Retrospection: The 'What If'
+            html += `
+                <div class="bg-gray-900/80 border border-gray-700 rounded-lg p-6 mb-8 shadow-lg">
+                    <h3 class="text-2xl font-bold text-pink-400 mb-2">AI Retrospection: The 'What If'</h3>
+                    <div class="prose prose-invert max-w-none text-gray-200">${data.retrospection && data.retrospection.trim() ? marked.parse(data.retrospection) : '<span class="italic text-gray-400">No retrospection provided by AI.</span>'}</div>
+                </div>
+            `;
+            // 6. Key Actors in the Narrative (styled as grid of cards)
+            const defaultKeyActors = [
+                { name: "Policymakers (Federal/State/Municipal)", description: "Responsible for creating incentives, regulations, and investment frameworks to guide structural transformations and address social inequalities.", icon: "fa-solid fa-landmark" },
+                { name: "German Households", description: "Experience the direct effects of economic stagnation, climate costs (heating, transport), and social policies (care burden, health access).", icon: "fa-solid fa-users" },
+                { name: "German Industry", description: "Faces challenges adapting to higher energy costs, international competition, and the need to decarbonize while maintaining competitiveness.", icon: "fa-solid fa-industry" },
+                { name: "Energy Sector", description: "Navigating the shift from fossil fuels to renewables, requiring massive investment in generation, grids, and network decommissioning.", icon: "fa-solid fa-bolt" },
+                { name: "Property Owners / Landlords", description: "Key decision-makers for building renovations and investments in heating systems, influenced by financing, standards, and tenancy laws.", icon: "fa-solid fa-building" },
+                { name: "European Central Bank (ECB)", description: "Sets monetary policy influencing financing conditions, inflation, and overall economic stability in the Euro Area, including Germany.", icon: "fa-solid fa-euro-sign" }
+            ];
+            const keyActors = (data.keyActors && Array.isArray(data.keyActors) && data.keyActors.length > 0) ? data.keyActors : defaultKeyActors;
+            html += `
+                <div class="bg-gray-900/80 border border-gray-700 rounded-lg p-6 mb-8 shadow-lg">
+                    <h3 class="text-2xl font-bold text-green-400 mb-4">Key Actors in the Narrative</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                        ${keyActors.map(actor => `
+                            <div class="bg-gray-800 border border-gray-700 rounded-lg p-5 flex flex-col justify-between items-center shadow-lg">
+                                <div class="text-5xl mb-3"><i class="${actor.icon} text-green-400"></i></div>
+                                <div class="font-bold text-white text-lg mb-1 text-center">${actor.name}</div>
+                                <div class="text-gray-300 text-center text-sm">${actor.description}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+            // Render all
+            contentDiv.innerHTML = html;
+            // Render charts
+            if (data.charts && data.charts.length > 0) {
+                data.charts.forEach((chart, i) => {
+                    this.renderPlotlyChart(chart, `storyboard-chart-${i}`);
+                });
+            }
+            // Render relationship graph (placeholder for now)
+            if (data.relationshipGraph) {
+                this.renderRelationshipGraph(data.relationshipGraph, 'relationship-graph');
+            }
+        } catch (error) {
+            contentDiv.innerHTML = `<div class="text-red-400 text-center p-6">An error occurred while generating the storyboard: ${error.message}</div>`;
         }
     }
 
@@ -294,10 +372,32 @@ class DashboardApp {
             
             if (result.errors.length > 0) {
                 const errorHtml = `
-                    <p>Some files failed to process:</p>
-                    <ul class="text-sm mt-2 text-left max-w-lg mx-auto">
-                        ${result.errors.map(err => `<li class="mb-1">• ${err}</li>`).join('')}
-                    </ul>
+                    <div class="bg-yellow-900/50 border border-yellow-600 rounded-lg p-4">
+                        <h4 class="text-yellow-400 font-semibold mb-2">Some files failed to process:</h4>
+                        <div class="text-sm text-yellow-200 space-y-2">
+                            ${result.errors.map(err => {
+                                // Extract filename and error message for better formatting
+                                const parts = err.split(': ');
+                                const filename = parts[0];
+                                const errorMsg = parts.slice(1).join(': ');
+                                return `
+                                    <div class="border-l-2 border-yellow-500 pl-3">
+                                        <div class="font-medium text-yellow-300">${filename}</div>
+                                        <div class="text-yellow-200">${errorMsg}</div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                        <div class="mt-3 text-xs text-yellow-300">
+                            <strong>Common solutions:</strong>
+                            <ul class="mt-1 list-disc list-inside space-y-1">
+                                <li>Ensure the PDF contains selectable text (not just images)</li>
+                                <li>Check that the PDF is not password-protected</li>
+                                <li>Try with a different PDF file</li>
+                                <li>Contact support if the issue persists</li>
+                            </ul>
+                        </div>
+                    </div>
                 `;
                 document.getElementById('upload-error').innerHTML = errorHtml;
                 document.getElementById('upload-error').classList.remove('hidden');
@@ -416,21 +516,29 @@ class DashboardApp {
     }
 
     renderPlotlyChart(chartConfig, elementId) {
-        let traces = [];
-        let layout = {
-            title: '',
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(31, 41, 55, 1)',
-            font: { color: '#ffffff', family: 'Arial, sans-serif' },
-            margin: { l: 60, r: 50, t: 20, b: 60 },
-            showlegend: chartConfig.dataKeys.length > 1,
-            legend: {
-                orientation: 'h',
-                y: -0.2,
-                x: 0.5,
-                xanchor: 'center'
+        try {
+            // Ensure Plotly is available
+            if (typeof Plotly === 'undefined') {
+                console.error('Plotly is not loaded');
+                document.getElementById(elementId).innerHTML = '<div class="text-red-400 text-center p-4">Chart library not available</div>';
+                return;
             }
-        };
+
+            let traces = [];
+            let layout = {
+                title: '',
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(31, 41, 55, 1)',
+                font: { color: '#ffffff', family: 'Arial, sans-serif' },
+                margin: { l: 60, r: 50, t: 20, b: 60 },
+                showlegend: chartConfig.dataKeys.length > 1,
+                legend: {
+                    orientation: 'h',
+                    y: -0.2,
+                    x: 0.5,
+                    xanchor: 'center'
+                }
+            };
 
         if (chartConfig.type === 'bar') {
             layout.xaxis = { color: '#9CA3AF', gridcolor: '#374151' };
@@ -481,6 +589,10 @@ class DashboardApp {
             responsive: true,
             displayModeBar: false
         });
+        } catch (error) {
+            console.error('Error rendering chart:', error);
+            document.getElementById(elementId).innerHTML = '<div class="text-red-400 text-center p-4">Failed to render chart</div>';
+        }
     }
 
     async generateNarrative(reportId) {
@@ -628,16 +740,63 @@ class DashboardApp {
         return messageId;
     }
 
-    speakText(text) {
-        if ('speechSynthesis' in window) {
-            window.speechSynthesis.cancel(); // Stop any ongoing speech
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = 'en-US';
-            utterance.rate = 0.9;
-            utterance.pitch = 1;
-            window.speechSynthesis.speak(utterance);
+    /**
+     * Read aloud the given text using browser SpeechSynthesis.
+     * @param {string} text - The text to read aloud.
+     */
+    readAloud(text) {
+        if (!text) return;
+        this.stopAloud();
+        this.speechUtterance = new window.SpeechSynthesisUtterance(text);
+        this.speechUtterance.onend = () => { this.isSpeaking = false; this.updateChatReadButtons(); };
+        this.speechUtterance.onerror = () => { this.isSpeaking = false; this.updateChatReadButtons(); };
+        this.isSpeaking = true;
+        this.speechSynthesis.speak(this.speechUtterance);
+        this.updateChatReadButtons();
+    }
+
+    /**
+     * Stop any ongoing speech synthesis.
+     */
+    stopAloud() {
+        if (this.speechSynthesis.speaking) {
+            this.speechSynthesis.cancel();
+        }
+        this.isSpeaking = false;
+        this.updateChatReadButtons();
+    }
+
+    /**
+     * Enable/disable Read/Stop buttons based on speaking state.
+     */
+    updateChatReadButtons() {
+        const readBtn = document.getElementById('chat-read-btn');
+        const stopBtn = document.getElementById('chat-stop-btn');
+        if (readBtn) readBtn.disabled = this.isSpeaking;
+        if (stopBtn) stopBtn.disabled = !this.isSpeaking;
+    }
+
+    /**
+     * Render a chat message (AI or user) with optional read-aloud controls.
+     * @param {string} message - The message content.
+     * @param {boolean} isUser - True if user message, false if AI.
+     * @returns {string} - HTML for the message.
+     */
+    renderChatMessage(message, isUser) {
+        // ... existing code ...
+        // Add Read and Stop buttons for AI messages
+        if (!isUser) {
+            return `
+                <div class="chat-message ai-message">
+                    <div class="chat-message-content">${marked.parse(message)}</div>
+                    <div class="flex gap-2 mt-2">
+                        <button id="chat-read-btn" class="bg-green-700 text-white px-3 py-1 rounded hover:bg-green-800" onclick="app.readAloud(this.previousElementSibling.textContent)">🔊 Read</button>
+                        <button id="chat-stop-btn" class="bg-gray-600 text-white px-3 py-1 rounded hover:bg-gray-700" onclick="app.stopAloud()" disabled>⏹ Stop</button>
+                    </div>
+                </div>
+            `;
         } else {
-            this.showNotification('Text-to-speech not supported in your browser', 'info');
+            return `<div class="chat-message user-message"><div class="chat-message-content">${marked.parse(message)}</div></div>`;
         }
     }
 
@@ -725,9 +884,137 @@ class DashboardApp {
     getSpinner() {
         return document.getElementById('spinner-template').innerHTML;
     }
+
+    showKeyActors() {
+        this.currentReportId = 'key_actors';
+        this.updateSidebarSelection('key-actors');
+
+        // Use cachedKeyActors if available, otherwise try to load from localStorage, otherwise aggregate from reports
+        let actors = this.cachedKeyActors;
+        if (!actors) {
+            const storedActors = localStorage.getItem('cachedKeyActors');
+            if (storedActors) {
+                try {
+                    actors = JSON.parse(storedActors);
+                    this.cachedKeyActors = actors;
+                } catch (e) {
+                    actors = null;
+                }
+            }
+        }
+        if (!actors) {
+            // Aggregate all key actors from all reports (fallback)
+            const actorsMap = {};
+            this.reports.forEach(report => {
+                if (report.actors && Array.isArray(report.actors)) {
+                    report.actors.forEach(actor => {
+                        if (!actorsMap[actor.name]) {
+                            actorsMap[actor.name] = { ...actor, reports: [] };
+                        }
+                        actorsMap[actor.name].reports.push(report);
+                    });
+                }
+            });
+            actors = Object.values(actorsMap);
+        }
+
+        const content = `
+            <div class="bg-gray-800 p-6 rounded-lg shadow-xl border border-gray-700 max-w-5xl mx-auto">
+                <h2 class="text-3xl font-bold text-white mb-2">Germany's Stalled Engine: Navigating Triple Structural Friction: Key Actors</h2>
+                <p class="text-gray-400 mb-6">Identified by the AI as the central figures in the synthesized macroeconomic narrative.</p>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                    ${actors && actors.length > 0 ? actors.map(actor => `
+                        <div class="bg-gray-700/60 border border-gray-600 rounded-lg p-5 flex flex-col justify-between shadow-lg">
+                            <div class="text-5xl mb-3"><i class="${actor.icon || 'fa-solid fa-user-group'} text-green-400"></i></div>
+                            <div class="font-bold text-white text-lg mb-1 text-center">${actor.name}</div>
+                            <div class="text-gray-300 text-center text-sm">${actor.description}</div>
+                        </div>
+                    `).join('') : '<div class="text-gray-400 col-span-full text-center">No key actors found in the reports.</div>'}
+                </div>
+            </div>
+        `;
+        document.getElementById('content-area').innerHTML = content;
+    }
+
+    showHighlightsTimeline() {
+        this.currentReportId = 'highlights_timeline';
+        this.updateSidebarSelection('highlights-timeline');
+        
+        // Show loading spinner
+        document.getElementById('content-area').innerHTML = `
+            <div class="flex justify-center items-center h-64">
+                ${this.getSpinner()} Loading timeline...
+            </div>
+        `;
+        
+        fetch('/api/timeline')
+            .then(res => res.json())
+            .then(data => {
+                const timeline = data.timeline || [];
+                const timelineHtml = `
+                    <div class="max-w-4xl mx-auto">
+                        <h2 class="text-3xl font-bold text-white mb-8 text-center">Report Highlights Timeline</h2>
+                        <div class="relative border-l-2 border-blue-800 pl-8">
+                            ${timeline.length > 0 ? timeline.map((item, idx) => `
+                                <div class="mb-10 relative">
+                                    <div class="absolute -left-4 top-1 w-3 h-3 bg-blue-400 rounded-full border-2 border-blue-800"></div>
+                                    <div class="bg-gray-800 rounded-lg shadow-md p-6">
+                                        <h3 class="text-xl font-bold text-white mb-2">${item.title}</h3>
+                                        <p class="text-gray-300 mb-2">${item.summary}</p>
+                                        <button onclick="app.showReport('${item.id}')" class="text-blue-400 hover:underline font-semibold text-sm">View Full Report &rarr;</button>
+                                    </div>
+                                </div>
+                            `).join('') : '<div class="text-gray-400 text-center">No highlights found.</div>'}
+                        </div>
+                    </div>
+                `;
+                document.getElementById('content-area').innerHTML = timelineHtml;
+            })
+            .catch(err => {
+                document.getElementById('content-area').innerHTML = `<div class="text-red-400 text-center p-6">Failed to load highlights timeline.</div>`;
+                this.showNotification('Failed to load highlights timeline', 'error');
+            });
+    }
 }
 
 // Initialize the app when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    window.app = new DashboardApp();
+    try {
+        // Ensure crypto.randomUUID is available before initializing
+        if (typeof crypto === 'undefined' || !crypto.randomUUID) {
+            console.warn('crypto.randomUUID not available, using fallback');
+            if (typeof crypto === 'undefined') {
+                window.crypto = {};
+            }
+            if (!crypto.randomUUID) {
+                crypto.randomUUID = function() {
+                    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                        var r = Math.random() * 16 | 0;
+                        var v = c == 'x' ? r : (r & 0x3 | 0x8);
+                        return v.toString(16);
+                    });
+                };
+            }
+        }
+        
+        window.app = new DashboardApp();
+    } catch (error) {
+        console.error('Failed to initialize DashboardApp:', error);
+        // Show user-friendly error message
+        const errorDiv = document.createElement('div');
+        errorDiv.innerHTML = `
+            <div class="fixed inset-0 bg-red-900 bg-opacity-90 flex items-center justify-center z-50">
+                <div class="bg-gray-800 p-6 rounded-lg shadow-xl border border-red-600 max-w-md mx-4">
+                    <h3 class="text-xl font-bold text-red-400 mb-4">Application Error</h3>
+                    <p class="text-gray-300 mb-4">Failed to initialize the dashboard application. Please refresh the page or contact support if the problem persists.</p>
+                    <div class="text-center">
+                        <button onclick="location.reload()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
+                            Refresh Page
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(errorDiv);
+    }
 });

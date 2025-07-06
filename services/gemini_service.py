@@ -69,36 +69,77 @@ class GeminiService:
             return "An error occurred while generating the analysis. Please check the console for details."
     
     async def generate_storyboard(self, reports: List[ReportData]) -> Optional[StoryboardData]:
-        """Generate a storyboard synthesis from multiple reports."""
+        """Generate a storyboard from all reports using a detailed, structured prompt."""
         if not self.enabled:
             return None
+
+        # Prepare the source data for the prompt
+        source_data = [report.dict() for report in reports]
         
-        def serialize_report(report):
-            try:
-                return report.dict()
-            except Exception as e:
-                logger.warning(f"Failed to serialize report: {e}")
-                return str(report)
+        prompt = '''
+You are a world-class macroeconomic strategist. Your mission is to analyze a collection of disparate economic reports and uncover the **"narrative singularity"**—the single, powerful, underlying story that connects them all. You must distill complexity into a clear, compelling, and unified thesis, visualize it, and reflect on your own analytical process.
 
-        reports_data = json.dumps([serialize_report(report) for report in reports], indent=2, default=str)
+Your response MUST be a single JSON object that conforms to this TypeScript interface:
+interface ChartDataPoint { name: string; [key: string]: string | number; }
+interface ChartConfig { type: 'bar' | 'line' | 'pie'; data: ChartDataPoint[]; dataKeys: { key: string; color: string; stackId?: string; name?: string }[]; title: string; description: string; xAxisKey: string; }
+interface GraphNode { id: string; title: string; }
+interface GraphEdge { source: string; target: string; label: string; }
+interface RelationshipGraphData { nodes: GraphNode[]; edges: GraphEdge[]; }
+interface KeyActor { name: string; description: string; icon: string; /* A full Font Awesome 6 class string, e.g., "fa-solid fa-users" or "fa-solid fa-industry" */ }
+interface StoryboardData {
+  title: string; // A compelling, overarching title for the entire storyboard analysis.
+  narrative: string;
+  charts: ChartConfig[];
+  introspection: string;
+  retrospection: string;
+  relationshipGraph: RelationshipGraphData;
+  keyActors: KeyActor[];
+}
+
+---
+**DETAILED INSTRUCTIONS**
+---
+
+**1. For the `title`:**
+*   Create a short, punchy, and insightful title for the entire synthesized report. This should encapsulate your singularity thesis.
+
+**2. For the `narrative` - The Singularity Thesis:**
+*   **Identify and State the Singularity:** Begin by explicitly stating the central theme or "singularity." This is your core thesis. Frame it as a powerful, insightful statement (e.g., "Germany's current economic friction stems not from isolated issues, but from a pervasive 'crisis of structural adaptation'").
+*   **Build the Case:** Demonstrate how each individual report serves as a pillar supporting your central thesis.
+*   **Synthesize the Implications:** Explain the compounded effect. What is the larger, emergent threat or opportunity?
+*   **Conclude with a Call to Action:** End with a concise, forward-looking statement focused on addressing the root cause.
+
+**3. For the `charts` - Visualizing the Singularity:**
+*   **Create a Thesis Visualization:** Your charts (1-2) **must** visually represent the narrative singularity. **Do not simply copy or re-aggregate data from the source charts.**
+*   **Be Creative:** Invent a new, meaningful visualization. For example, a "Structural Drag Index" chart quantifying each report's contribution to the problem.
+*   If you cannot create a meaningful visualization, return an empty array `[]`.
+
+**4. For the `relationshipGraph` - Mapping the Connections:**
+*   **Goal:** Create a node-edge graph that visually maps the most critical inter-report relationships supporting your singularity thesis. This provides a visual 'mind map' of your core argument.
+*   **Nodes:** Populate the `nodes` array. Each node represents one of the source reports. Use the report's `id` and `title`.
+*   **Edges:** Populate the `edges` array with 2-4 of the most critical connections. An edge connects two reports (source -> target). The `label` on the edge MUST be a concise explanation of the causal link (e.g., 'Reduced construction activity lowers tax revenue, worsening debt outlook').
+
+**5. For the `introspection` - The 'Why':**
+*   **Explain Your Reasoning:** In Markdown, reveal the logical path that led to your thesis.
+*   **Pivotal Evidence**: Pinpoint the specific data points from each report that were most influential.
+*   **Connecting the Dots**: Detail the non-obvious connections you discovered, which should align with your `relationshipGraph`.
+
+**6. For the `retrospection` - The 'What If':**
+*   **Critique Your Own Analysis:** In Markdown, show intellectual humility.
+*   **Alternative Theses**: Briefly mention one plausible alternative 'singularity' you considered and why you discarded it.
+*   **Information Gaps**: If you could request one new piece of data to strengthen your analysis, what would it be?
+
+**7. For the `keyActors` - The Main Characters:**
+*   Identify 4-6 key actors or stakeholders central to your narrative (e.g., "German Consumers," "Policymakers," "Export-Oriented Industries," "Low-Income Households").
+*   For each actor, provide a short `description` of their role, challenges, or position within the story.
+*   Assign a relevant Font Awesome 6 icon class string to each actor for visual representation (e.g., "fa-solid fa-users" for consumers, "fa-solid fa-landmark" for policymakers).
+
+---
+**SOURCE DATA**
+---
+{source_data}
+'''
         
-        # Improved prompt with explicit JSON formatting instructions
-        prompt = f"""
-    You are a chief economist creating a synthesis from economic reports.
-
-    Return ONLY a valid JSON object with this exact structure (no code fences, no extra text):
-
-    {{"narrative": "Your narrative here (use \\n for line breaks, escape quotes as \\\")", "charts": [...]}}
-
-    Instructions:
-    1. Write a compelling economic narrative about Germany
-    2. Create 1-3 synthesized charts from the data
-    3. CRITICAL: Properly escape all JSON strings (\\n for newlines, \\" for quotes)
-
-    Data: {reports_data[:50000]}...
-
-    Respond with ONLY the JSON object:"""
-
         try:
             response = await asyncio.to_thread(
                 self.model.generate_content,
@@ -108,31 +149,60 @@ class GeminiService:
                     temperature=0.8
                 )
             )
-            
             if not response or not response.text:
-                logger.error("Empty response from AI")
                 return None
-            
-            # Robust JSON extraction and parsing
-            parsed_data = self._extract_and_parse_json(response.text)
-            if not parsed_data:
-                return None
-                
-            # Build result
-            charts = []
-            for chart_data in parsed_data.get("charts", []):
-                try:
-                    charts.append(ChartConfig(**chart_data))
-                except Exception as e:
-                    logger.warning(f"Invalid chart data: {e}")
-            
-            return StoryboardData(
-                narrative=parsed_data.get("narrative", ""),
-                charts=charts
-            )
-            
+            response_text = response.text
         except Exception as e:
             logger.error(f"Error generating storyboard: {e}")
+            return None
+        
+        # Try to parse the response as JSON
+        try:
+            parsed = self._extract_and_parse_json(response_text)
+            if not parsed:
+                return None
+            # Fallbacks for missing fields
+            if not parsed.get('introspection'):
+                parsed['introspection'] = 'No introspection provided by AI.'
+            if not parsed.get('retrospection'):
+                parsed['retrospection'] = 'No retrospection provided by AI.'
+            if not parsed.get('keyActors') or not isinstance(parsed['keyActors'], list) or len(parsed['keyActors']) == 0:
+                # Optionally, you could pull from a main Key Actors section if available
+                parsed['keyActors'] = [
+                    {
+                        "name": "Policymakers (Federal/State/Municipal)",
+                        "description": "Responsible for creating incentives, regulations, and investment frameworks to guide structural transformations and address social inequalities.",
+                        "icon": "fa-solid fa-landmark"
+                    },
+                    {
+                        "name": "German Households",
+                        "description": "Experience the direct effects of economic stagnation, climate costs (heating, transport), and social policies (care burden, health access).",
+                        "icon": "fa-solid fa-users"
+                    },
+                    {
+                        "name": "German Industry",
+                        "description": "Faces challenges adapting to higher energy costs, international competition, and the need to decarbonize while maintaining competitiveness.",
+                        "icon": "fa-solid fa-industry"
+                    },
+                    {
+                        "name": "Energy Sector",
+                        "description": "Navigating the shift from fossil fuels to renewables, requiring massive investment in generation, grids, and network decommissioning.",
+                        "icon": "fa-solid fa-bolt"
+                    },
+                    {
+                        "name": "Property Owners / Landlords",
+                        "description": "Key decision-makers for building renovations and investments in heating systems, influenced by financing, standards, and tenancy laws.",
+                        "icon": "fa-solid fa-building"
+                    },
+                    {
+                        "name": "European Central Bank (ECB)",
+                        "description": "Sets monetary policy influencing financing conditions, inflation, and overall economic stability in the Euro Area, including Germany.",
+                        "icon": "fa-solid fa-euro-sign"
+                    }
+                ]
+            return StoryboardData(**parsed)
+        except Exception as e:
+            logger.error(f"Failed to parse storyboard JSON: {e}\nResponse: {response_text}")
             return None
 
     def _extract_and_parse_json(self, text: str) -> dict:
@@ -198,10 +268,78 @@ class GeminiService:
             json_str = json_str.replace(match.group(0), f'"narrative": "{fixed_narrative}"')
         
         return json_str
+
+    def _create_fallback_report(self, full_text: str, ai_response: str) -> dict:
+        """Create a basic report structure when AI JSON parsing fails."""
+        import re
+        from datetime import datetime
+        
+        logger.info("Creating fallback report structure")
+        
+        # Extract title from the first few lines of text
+        lines = full_text.split('\n')
+        title = "Economic Report"
+        for line in lines[:10]:  # Check first 10 lines
+            line = line.strip()
+            if len(line) > 10 and len(line) < 200 and not line.isdigit():
+                # Look for potential titles (capitalized, reasonable length)
+                if line[0].isupper() and not line.startswith('Page') and not line.startswith('www'):
+                    title = line
+                    break
+        
+        # Create URL-friendly ID
+        id_base = re.sub(r'[^a-zA-Z0-9\s-]', '', title.lower())
+        id_base = re.sub(r'\s+', '-', id_base.strip())
+        if not id_base:
+            id_base = f"report-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        
+        # Create summary from first paragraph
+        paragraphs = [p.strip() for p in full_text.split('\n\n') if p.strip()]
+        summary = paragraphs[0][:300] + "..." if paragraphs and len(paragraphs[0]) > 300 else "Report analysis and findings."
+        
+        # Extract key findings (look for bullet points, numbers, etc.)
+        key_findings = []
+        for line in lines:
+            line = line.strip()
+            if (line.startswith('•') or line.startswith('-') or 
+                re.match(r'^\d+\.', line) or 
+                (len(line) > 20 and len(line) < 200 and line[0].isupper())):
+                # Clean up the finding
+                finding = re.sub(r'^[•\-\d\.\s]+', '', line)
+                if finding and len(finding) > 10:
+                    key_findings.append(finding)
+                    if len(key_findings) >= 5:  # Limit to 5 findings
+                        break
+        
+        # If no findings extracted, create generic ones
+        if not key_findings:
+            key_findings = [
+                "Analysis of economic trends and indicators",
+                "Key policy implications and recommendations",
+                "Statistical data and quantitative findings",
+                "Comparative analysis with previous periods",
+                "Future outlook and projections"
+            ]
+        
+        return {
+            "id": id_base,
+            "title": title,
+            "summary": summary,
+            "keyFindings": key_findings,
+            "charts": []  # No charts in fallback
+        }
     async def create_report_from_text(self, full_text: str) -> Optional[ReportData]:
         """Create a structured report from raw text."""
         if not self.enabled:
+            logger.warning("AI service is disabled")
             return None
+        
+        # Validate input text
+        if not full_text or not full_text.strip():
+            logger.error("Empty or invalid text provided")
+            return None
+        
+        logger.info(f"Processing text of length: {len(full_text)} characters")
         
         prompt = f"""
             You are an expert data analyst AI. Your task is to read the following text from an economic report and convert it into a structured JSON object.
@@ -240,28 +378,72 @@ class GeminiService:
             """
                     
         try:
+            logger.info("Sending request to AI model")
             response = await asyncio.to_thread(
                 self.model.generate_content,
                 prompt,
                 generation_config=genai.types.GenerationConfig(
-                    response_mime_type="application/json",
                     max_output_tokens=settings.MAX_TOKENS,
                     temperature=0.5
                 )
             )
             
+            if not response or not response.text:
+                logger.error("Empty response from AI model")
+                return None
+            
             json_str = response.text.strip()
-            parsed_data = json.loads(json_str)
+            logger.info(f"AI response length: {len(json_str)} characters")
+            
+            # Try to parse JSON with better error handling
+            try:
+                parsed_data = json.loads(json_str)
+                logger.info("JSON parsing successful with direct json.loads")
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing failed: {e}")
+                logger.error(f"Response text: {json_str[:500]}...")
+                # Try to extract JSON from the response
+                logger.info("Attempting to extract JSON from response using _extract_and_parse_json")
+                parsed_data = self._extract_and_parse_json(json_str)
+                if not parsed_data:
+                    # Fallback: try to create a basic report from the text
+                    logger.warning("Attempting fallback report creation")
+                    parsed_data = self._create_fallback_report(full_text, json_str)
+                    if not parsed_data:
+                        logger.error("Fallback report creation also failed")
+                        return None
+                else:
+                    logger.info("JSON extraction successful using _extract_and_parse_json")
+            
+            # Validate required fields
+            required_fields = ["id", "title", "summary", "keyFindings"]
+            missing_fields = []
+            for field in required_fields:
+                if field not in parsed_data:
+                    missing_fields.append(field)
+            
+            if missing_fields:
+                logger.error(f"Missing required fields: {missing_fields}")
+                logger.error(f"Available fields: {list(parsed_data.keys())}")
+                return None
+            
+            logger.info("All required fields present in parsed data")
             
             # Convert charts to ChartConfig objects
             charts = []
-            for chart_data in parsed_data.get("charts", []):
-                try:
-                    chart = ChartConfig(**chart_data)
-                    charts.append(chart)
-                except Exception as e:
-                    logger.warning(f"Invalid chart data in uploaded report: {e}")
+            chart_data = parsed_data.get("charts", [])
+            logger.info(f"Processing {len(chart_data)} charts")
             
+            for i, chart_data_item in enumerate(chart_data):
+                try:
+                    chart = ChartConfig(**chart_data_item)
+                    charts.append(chart)
+                    logger.info(f"Successfully processed chart {i+1}")
+                except Exception as e:
+                    logger.warning(f"Invalid chart data in uploaded report (chart {i+1}): {e}")
+                    logger.warning(f"Chart data: {chart_data_item}")
+            
+            logger.info(f"Successfully created report with {len(charts)} charts")
             return ReportData(
                 id=parsed_data["id"],
                 title=parsed_data["title"],
@@ -272,6 +454,7 @@ class GeminiService:
             )
         except Exception as e:
             logger.error(f"Error creating report from text: {e}")
+            logger.error(f"Full text preview: {full_text[:200]}...")
             return None
     
     async def chat_with_report(self, report: ReportData, message: str) -> str:

@@ -14,6 +14,7 @@ from services.database_service import DatabaseService
 from services.gemini_service import GeminiService
 from services.pdf_service import PDFService
 from config import settings
+from data.seed_data import get_seed_data
 
 # Setup logging
 logging.basicConfig(
@@ -23,12 +24,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Initialize services
+# DatabaseService: Handles all database operations
+# GeminiService: Handles AI interactions
+# PDFService: Handles PDF extraction/validation
 db_service = DatabaseService()
 gemini_service = GeminiService()
 pdf_service = PDFService()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """App startup and shutdown logic."""
     # Startup
     logger.info("Starting German Economic Insights Dashboard...")
     db_service.initialize_database()
@@ -173,11 +178,21 @@ async def upload_reports(files: List[UploadFile] = File(...)):
                 logger.info(f"Starting AI processing for {file.filename}")
                 report_data = await gemini_service.create_report_from_text(text)
                 logger.info(f"AI processing completed for {file.filename}")
+                
+                # Add detailed logging for AI response validation
+                if report_data:
+                    logger.info(f"AI successfully generated report: {report_data.id} - {report_data.title}")
+                    logger.info(f"Report has {len(report_data.keyFindings)} key findings and {len(report_data.charts)} charts")
+                else:
+                    logger.error(f"AI returned None for {file.filename} - this indicates the AI could not generate a valid report structure")
+                    
             except Exception as e:
+                logger.error(f"AI processing failed for {file.filename}: {str(e)}", exc_info=True)
                 errors.append(f"File '{file.filename}': AI processing failed - {str(e)}")
                 continue
             
             if not report_data:
+                logger.error(f"AI returned None for {file.filename} - no structured report could be generated")
                 errors.append(f"File '{file.filename}': AI could not generate a structured report from the text")
                 continue
             
@@ -210,6 +225,7 @@ async def upload_reports(files: List[UploadFile] = File(...)):
         errors=errors,
         success_count=len(new_reports)
     ).dict()
+
 @app.post("/api/generate-narrative/{report_id}")
 async def generate_narrative(report_id: str):
     """Generate AI narrative for a specific report."""
@@ -296,11 +312,92 @@ async def backup_database():
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "database": "connected" if db_service.get_database_stats() else "disconnected",
-        "ai_service": "enabled" if gemini_service.enabled else "disabled"
-    }
+    try:
+        # Check if AI service is enabled
+        ai_status = "enabled" if gemini_service.enabled else "disabled"
+        
+        # Check database
+        db_stats = db_service.get_database_stats()
+        
+        return {
+            "status": "healthy",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "ai_service": ai_status,
+            "database": {
+                "total_reports": db_stats.get("total_reports", 0),
+                "database_size_mb": db_stats.get("database_size_mb", 0)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {"status": "unhealthy", "error": str(e)}
+
+@app.get("/api/timeline")
+async def get_highlights_timeline():
+    """Get highlights timeline from seed data."""
+    try:
+        seed_data = get_seed_data()
+        # Optionally, add a date field if available in the future
+        timeline = [
+            {
+                "id": report["id"],
+                "title": report["title"],
+                "summary": report["summary"],
+            }
+            for report in seed_data
+        ]
+        return {"timeline": timeline}
+    except Exception as e:
+        logger.error(f"Error fetching highlights timeline: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch highlights timeline")
+
+@app.post("/api/debug-pdf")
+async def debug_pdf_processing(file: UploadFile = File(...)):
+    """Debug endpoint to test PDF processing step by step."""
+    try:
+        logger.info(f"Debug processing file: {file.filename}")
+        
+        # Read file content
+        content = await file.read()
+        logger.info(f"File size: {len(content)} bytes")
+        
+        # Validate PDF
+        is_valid, validation_msg = pdf_service.validate_pdf(content)
+        logger.info(f"PDF validation: {is_valid} - {validation_msg}")
+        
+        if not is_valid:
+            return {"error": f"PDF validation failed: {validation_msg}"}
+        
+        # Extract text
+        text = pdf_service.extract_text_from_pdf(content)
+        logger.info(f"Text extraction: {len(text)} characters")
+        
+        if not text or not text.strip():
+            return {"error": "No text could be extracted from PDF"}
+        
+        if len(text.strip()) < 100:
+            return {"error": f"Extracted text too short: {len(text)} characters"}
+        
+        # Try AI processing
+        report_data = await gemini_service.create_report_from_text(text)
+        
+        if report_data:
+            return {
+                "success": True,
+                "report": {
+                    "id": report_data.id,
+                    "title": report_data.title,
+                    "summary": report_data.summary,
+                    "keyFindings": report_data.keyFindings,
+                    "charts_count": len(report_data.charts)
+                }
+            }
+        else:
+            return {"error": "AI could not generate a structured report"}
+            
+    except Exception as e:
+        logger.error(f"Debug processing error: {e}", exc_info=True)
+        return {"error": f"Processing error: {str(e)}"}
 
 if __name__ == "__main__":
     logger.info(f"Starting server on {settings.HOST}:{settings.PORT}")
